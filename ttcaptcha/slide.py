@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from roboflow import Roboflow
-import logging
+import logging , json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -110,6 +110,12 @@ class Solver:
         )
         logging.info("Final solver result calculated: %s", self.final_solver_result)
         self.visualize_with_rectangle(resized_image)
+
+        await self._close_popup_if_open()
+
+    async def _close_popup_if_open(self):
+        logging.info("Checking for open popup and closing if necessary")
+        
     async def _download_and_convert_to_gray(self, url):
         async with self.__client.stream("GET", url) as response:
             img_content = await response.aread()
@@ -184,6 +190,7 @@ class Solver:
         plt.imshow(image_rgb)
         plt.axis("on")
         plt.show()
+        plt.close()
 
     def calculate_correct_position(self, puzzle, piece):
         puzzle_center_x = puzzle["x"] + puzzle["width"] / 2
@@ -202,49 +209,28 @@ class Solver:
 
     async def __post_captcha(self) -> dict:
         reply_data = self._generate_reply_data()
-        body = self._build_post_body(reply_data)
+        body = json.dumps(self._build_post_body(reply_data))
         headers = self._build_post_headers()
-        cookies = self._build_post_cookies()
 
         url = self._build_post_url()
-        req = await self.__client.post(url=url, headers=headers, json=body, cookies=cookies)
-        print(reply_data)
-        print(req.text)
+        req = await self.__client.post(url=url, headers=headers, json=body)
+        logging.info("Response Text: %s", req.text)
 
+        if req.status_code != 200:
+            logging.error("Error in response: %s", req.text)
+            raise Exception(f"Error in response: {req.text}")
+
+        return req.json()
     def _generate_reply_data(self):
         reply_data = []
-        relative_time = 200
+        relative_time = 121
 
-        for i in range(
-            11,
-            round(int(self.second_piece["x"]) - int(self.first_piece["x"])),
-            random.randint(10, 20),
-        ):
-            x_value = i
-            y_value = 0
+        x_value = int(self.final_solver_result["x"])
+        y_value = int(self.final_solver_result["y"])
 
-            delay = random.uniform(0.01, 0.02)
-            relative_time += int(delay * 1000)
-
+        for i in range(10):
             reply_data.append(
-                {"x": x_value, "y": y_value, "relative_time": relative_time}
-            )
-
-            time.sleep(delay)
-
-        for i in range(0, 5):
-            delay = random.uniform(0.01, 0.02)
-            relative_time += int(delay * 1000)
-            time.sleep(delay)
-            y_value = 0
-
-            reply_data.append(
-                {
-                    "x": round(int(self.second_piece["x"]) - int(self.first_piece["x"]))
-                    - i,
-                    "y": y_value,
-                    "relative_time": relative_time,
-                }
+                {"x": x_value + i, "y": y_value, "relative_time": relative_time + i * 10}
             )
 
         return reply_data
@@ -278,6 +264,7 @@ class Solver:
             "events": '{"userMode":0}',
         }
 
+
     def _build_post_headers(self):
         return {
             "Host": "rc-verification-sg.tiktokv.com",
@@ -289,13 +276,7 @@ class Solver:
             "X-Tt-Store-Region-Src": "uid",
             "User-Agent": "okhttp/3.10.0.1",
             "Content-Type": "application/json; charset=utf-8",
-        }
-
-    def _build_post_cookies(self):
-        return {
-            "store-idc": "alisg",
-            "tt-target-idc": "alisg",
-            "install_id": self.__install_id,
+            "Cookie": f"install_id={self.__install_id}; tt-target-idc=alisg; store-idc=alisg",
         }
 
     def _build_post_url(self):
@@ -304,13 +285,7 @@ class Solver:
             f"lang=en&app_name=musical_ly&h5_sdk_version=2.33.7&h5_sdk_use_type=cdn&"
             f"sdk_version=2.2.1.i18n&iid={self.__install_id}&did={self.__device_id}&"
             f"device_id={self.__device_id}&ch=googleplay&aid=1233&os_type=0&mode=slide&"
-            f"tmp={int(time.time())}{random.randint(111, 999)}&platform=app&webdriver=false&"
-            f"verify_host=https%3A%2F%2Fverify-sg.tiktokv.com%2F&locale=en&channel=googleplay&"
-            f"app_key&vc=26.8.1&app_version=26.8.1&session_id&region=sg&use_native_report=1&"
-            f"use_jsb_request=1&orientation=2&resolution=1080*1920&os_version=28&"
-            f"device_brand=HUAWEI&device_model=HPB-AN00&os_name=Android&version_code=2681&"
-            f"device_type=HPB-AN00&device_platform=Android&app_version=26.8.1&type=verify&"
-            f"detail=NiVvRQBeu0wRSq5pT4XGWgKdbJjjl9d4n5RV*UvyiJc2dmv8Xj3aZcHymF91lxc2C2oge67f0oYkW31BdXQj0mLX1p4zfHmyY7Zig7*YK3NLFYd656EkbsHIEFT6aKqUQtANK9nRk8niJFJMG9vomGxIzhfN*Kh3GQFmEwAdUu2vJrtt1sxuBPjpefNQtf*2P8qPtGXsvkDRF-eSkU5mGdJvPZuB1NxA7M*OP*wTySov9-TDAAXqkPBTk7tX4I5"
+            f"tmp={int(time.time())}{random.randint(111, 999)}&platform=app&webdriver=false&verify_host=https%3A%2F%2Fverify-sg.tiktokv.com%2F&locale=en&channel=googleplay&app_key&vc=26.8.1&app_verison=26.8.1&session_id&region=sg&use_native_report=1&use_jsb_request=1&orientation=2&resolution=1080*1920&os_version=28&device_brand=HUAWEI&device_model=HPB-AN00&os_name=Android&version_code=2681&device_type=HPB-AN00&device_platform=Android&app_version=26.8.1&type=verify&detail=NiVvRQBeu0wRSq5pT4XGWgKdbJjjl9d4n5RV*UvyiJc2dmv8Xj3aZcHymF91lxc2C2oge67f0oYkW31BdXQj0mLX1p4zfHmyY7Zig7*YK3NLFYd656EkbsHIEFT6aKqUQtANK9nRk8niJFJMG9vomGxIzhfN*Kh3GQFmEwAdUu2vJrtt1sxuBPjpefNQtf*2P8qPtGXsvkDRF-eSkU5mGdJvPZuB1NxA7M*OP*wTySov9-TDAAXqkPBTk7tX4I5bVcVLYtMcWuBo0Rzkmu1-cXrXO4iaGI0fYsSkzKYrsnDeVnK50T3OeYpuamwpH3fR4AAGOBf40mG1eBOoP1-Q2wX-c4Hjp*8Dku77kE3fHpDzXdfhgDsj*kp*aAnDz06TEMfJciiuNiqJpnbXLonZhm-7gEjgyP--S9TNAQE0ldt8wWlnsmj4urO6XuYb&server_sdk_env=%7B%22idc%22%3A%22my%22%2C%22region%22%3A%22ALISG%22%2C%22server_type%22%3A%22passport%22%7D&imagex_domain&subtype=slide&challenge_code=99999&triggered_region=sg&cookie_enabled=true&screen_width=360&screen_height=640&browser_language=en-US&browser_platform=Linux%20i686&browser_name=Mozilla&browser_version=5.0%20%28Linux%3B%20Android%209%3B%20HPB-AN00%20Build%2FPQ3B.190801.06281541%3B%20wv%29%20AppleWebKit%2F537.36%20%28KHTML%2C%20like%20Gecko%29%20Version%2F4.0%20Chrome%2F91.0.4472.114%20Mobile%20Safari%2F537.36%20BytedanceWebview%2Fd8a21c6"
         )
 
     async def solve_captcha(self):
