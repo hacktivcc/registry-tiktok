@@ -1,20 +1,22 @@
 import time
 import random
-import requests
+import httpx
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from roboflow import Roboflow
+import logging
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class Solver:
-    def __init__(self, did, iid, session):
+    def __init__(self, did, iid, client):
         self.rf = Roboflow(api_key="HkhBOt8Vmh9aLQ9ETSbf")
         self.__host = "verification16-normal-c-useast2a.tiktokv.com"
         self.__device_id = did
         self.__install_id = iid
         self.__cookies = ""
-        self.__client = session
+        self.__client = client
         self.captcha_id = ""
         self.verify_id = ""
         self.image_shape = ""
@@ -22,22 +24,26 @@ class Solver:
         self.final_solver_result = ""
         self.first_piece = ""
         self.second_piece = ""
+        logging.info("Solver initialized with device_id: %s and install_id: %s", did, iid)
 
-    def get_captcha(self):
+    async def get_captcha(self):
+        logging.info("Fetching captcha")
         params = self._build_captcha_params()
         headers = self._build_captcha_headers()
 
-        response = self.__client.get(
+        response = await self.__client.get(
             url=f"https://{self.__host}/captcha/get", params=params, headers=headers
         )
 
         data = response.json()
         if data["code"] == 501:
+            logging.error("Error fetching captcha: %s", data["message"])
             raise Exception(data["message"])
         self.captcha_id = data["data"]["id"]
         self.verify_id = data["data"]["verify_id"]
         url1 = data["data"]["question"]["url1"]
         url2 = data["data"]["question"]["url2"]
+        logging.info("Captcha fetched with id: %s and verify_id: %s", self.captcha_id, self.verify_id)
         return url1, url2
 
     def _build_captcha_params(self):
@@ -88,11 +94,12 @@ class Solver:
             "user-agent": "okhttp/3.10.0.1",
         }
 
-    def process_image(self, url1, url2):
-        gray_img = self._download_and_convert_to_gray(url1)
+    async def process_image(self, url1, url2):
+        logging.info("Processing images from URLs: %s, %s", url1, url2)
+        gray_img = await self._download_and_convert_to_gray(url1)
         self._detect_boxes(gray_img)
 
-        image2_gray = self._download_and_convert_to_gray(url2)
+        image2_gray = await self._download_and_convert_to_gray(url2)
         overlay_img = self._overlay_images(gray_img, image2_gray)
 
         resized_image = self._resize_image(overlay_img)
@@ -101,10 +108,11 @@ class Solver:
         self.final_solver_result = self.calculate_correct_position(
             self.second_piece, self.first_piece
         )
+        logging.info("Final solver result calculated: %s", self.final_solver_result)
         self.visualize_with_rectangle(resized_image)
-
-    def _download_and_convert_to_gray(self, url):
-        img_content = requests.get(url).content
+    async def _download_and_convert_to_gray(self, url):
+        async with self.__client.stream("GET", url) as response:
+            img_content = await response.aread()
         image = cv2.imdecode(np.frombuffer(img_content, dtype="uint8"), cv2.IMREAD_COLOR)
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
@@ -192,16 +200,16 @@ class Solver:
             "y": piece["y"] + offset_y,
         }
 
-    def __post_captcha(self) -> dict:
+    async def __post_captcha(self) -> dict:
         reply_data = self._generate_reply_data()
         body = self._build_post_body(reply_data)
         headers = self._build_post_headers()
         cookies = self._build_post_cookies()
 
         url = self._build_post_url()
-        req = self.__client.post(url=url, headers=headers, json=body, cookies=cookies)
+        req = await self.__client.post(url=url, headers=headers, json=body, cookies=cookies)
         print(reply_data)
-        print(req.json())
+        print(req.text)
 
     def _generate_reply_data(self):
         reply_data = []
@@ -305,13 +313,18 @@ class Solver:
             f"detail=NiVvRQBeu0wRSq5pT4XGWgKdbJjjl9d4n5RV*UvyiJc2dmv8Xj3aZcHymF91lxc2C2oge67f0oYkW31BdXQj0mLX1p4zfHmyY7Zig7*YK3NLFYd656EkbsHIEFT6aKqUQtANK9nRk8niJFJMG9vomGxIzhfN*Kh3GQFmEwAdUu2vJrtt1sxuBPjpefNQtf*2P8qPtGXsvkDRF-eSkU5mGdJvPZuB1NxA7M*OP*wTySov9-TDAAXqkPBTk7tX4I5"
         )
 
-    def solve_captcha(self):
-        url1, url2 = self.get_captcha()
-        self.process_image(url1, url2)
-        self.__post_captcha()
-
+    async def solve_captcha(self):
+        logging.info("Starting captcha solving process")
+        url1, url2 = await self.get_captcha()
+        await self.process_image(url1, url2)
+        await self.__post_captcha()
+        logging.info("Captcha solving process completed")
 
 if __name__ == "__main__":
-    session = requests.session()
-    solver = Solver("7383996999998590130", "7383997454771308293", session)
-    solver.solve_captcha()
+    async def main():
+        async with httpx.AsyncClient() as client:
+            solver = Solver("7383996999998590130", "7383997454771308293", client)
+            await solver.solve_captcha()
+
+    import asyncio
+    asyncio.run(main())
